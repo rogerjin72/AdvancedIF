@@ -35,6 +35,7 @@ class DataProcessor:
         if_judge: IFRubricsJudge,
         system_steer_judge: SystemSteerIFRubricsJudge,
         max_concurrency: int = 10,
+        exclude_generation_failures: bool = False,
     ) -> None:
         """
         Initialize the processor with judge instances.
@@ -43,10 +44,14 @@ class DataProcessor:
             if_judge: IFRubricsJudge instance for IF tasks
             system_steer_judge: SystemSteerIFRubricsJudge instance for system steer tasks
             max_concurrency: Maximum number of concurrent requests (default: 10)
+            exclude_generation_failures: If True, skip rows whose `_generation_error`
+                field is set (i.e. the generator model failed to produce a response)
+                so they are not judged or counted in the metrics.
         """
         self.if_judge = if_judge
         self.system_steer_judge = system_steer_judge
         self.max_concurrency = max_concurrency
+        self.exclude_generation_failures = exclude_generation_failures
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
     def _parse_dialog(self, dialog_data: str | List[Dict[str, Any]]) -> List[Message]:
@@ -230,7 +235,7 @@ class DataProcessor:
         input_file: Path,
         task_filter: str | None,
         file_type: str,
-    ) -> tuple[int, int, List[Dict[str, Any]], List[JudgeResult]]:
+    ) -> tuple[int, int, int, List[Dict[str, Any]], List[JudgeResult]]:
         """
         Read and filter rows from input file.
 
@@ -240,10 +245,11 @@ class DataProcessor:
             file_type: "csv" or "jsonl"
 
         Returns:
-            Tuple of (total_rows, filtered_rows, rows_to_process, parse_errors)
+            Tuple of (total_rows, filtered_rows, gen_failures, rows_to_process, parse_errors)
         """
         total_rows = 0
         filtered_rows = 0
+        gen_failures = 0
         rows_to_process = []
         parse_errors = []
 
@@ -254,6 +260,9 @@ class DataProcessor:
                     total_rows += 1
                     if task_filter and row.get("benchmark_name", "") != task_filter:
                         filtered_rows += 1
+                        continue
+                    if self.exclude_generation_failures and row.get("_generation_error"):
+                        gen_failures += 1
                         continue
                     rows_to_process.append(row)
 
@@ -268,6 +277,12 @@ class DataProcessor:
                         if task_filter and row.get("benchmark_name", "") != task_filter:
                             filtered_rows += 1
                             continue
+                        if (
+                            self.exclude_generation_failures
+                            and row.get("_generation_error")
+                        ):
+                            gen_failures += 1
+                            continue
                         rows_to_process.append(row)
 
                     except json.JSONDecodeError as e:
@@ -279,7 +294,7 @@ class DataProcessor:
                             )
                         )
 
-        return total_rows, filtered_rows, rows_to_process, parse_errors
+        return total_rows, filtered_rows, gen_failures, rows_to_process, parse_errors
 
     async def _process_file_async(
         self,
@@ -309,9 +324,16 @@ class DataProcessor:
             (
                 total_rows,
                 filtered_rows,
+                gen_failures,
                 rows_to_process,
                 parse_errors,
             ) = await self._read_and_filter_rows(input_file, task_filter, file_type)
+
+            if self.exclude_generation_failures:
+                logger.info(
+                    "Excluding %d row(s) with generation failures from evaluation",
+                    gen_failures,
+                )
 
             # Process all rows concurrently
             logger.info(f"Processing {len(rows_to_process)} rows in parallel...")
@@ -342,6 +364,7 @@ class DataProcessor:
         # Extract just the results for stats calculation
         results = [r for _, r in results_with_data]
         overall_stats = self._calculate_stats(results, total_rows, filtered_rows)
+        overall_stats["generation_failures_excluded"] = gen_failures
 
         # Group by task and calculate per-task stats
         from collections import defaultdict

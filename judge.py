@@ -387,7 +387,6 @@ class BaseRubricsJudge:
         api_key: str,
         model: str = "o3-mini-2025-01-31",
         max_completion_tokens: int = 32768,
-        temperature: float = 0.0,
     ) -> None:
         """
         Initialize the judge with OpenAI configuration.
@@ -396,12 +395,10 @@ class BaseRubricsJudge:
             api_key: OpenAI API key
             model: Model name to use (e.g., "gpt-4", "model="o3-mini-2025-01-31"")
             max_completion_tokens: Maximum tokens for the response
-            temperature: Temperature for sampling (0.0 = deterministic)
         """
         self.api_key = api_key
         self.model = model
         self.max_completion_tokens = max_completion_tokens
-        self.temperature = temperature
         self.client = openai.OpenAI(api_key=api_key)
 
     def _get_last_user_turn(self, messages: List[Message]) -> str:
