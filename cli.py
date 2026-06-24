@@ -107,6 +107,14 @@ def cli() -> None:
     help="Maximum cocurrency for processing",
 )
 @click.option(
+    "--exclude-generation-failures",
+    "exclude_generation_failures",
+    is_flag=True,
+    default=False,
+    help="Skip rows where the generator model failed (marked with _generation_error) "
+    "so they are not judged or counted in the metrics",
+)
+@click.option(
     "--log-level",
     default="INFO",
     type=click.Choice(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]),
@@ -125,7 +133,7 @@ def evaluate(
     model: str,
     max_completion_tokens: int,
     max_concurrency: int,
-    temperature: float,
+    exclude_generation_failures: bool,
     log_level: str,
     log_file: Path | None,
 ) -> None:
@@ -149,20 +157,19 @@ def evaluate(
         api_key=api_key,
         model=model,
         max_completion_tokens=max_completion_tokens,
-        temperature=temperature,
     )
 
     system_steer_judge = SystemSteerIFRubricsJudge(
         api_key=api_key,
         model=model,
         max_completion_tokens=max_completion_tokens,
-        temperature=temperature,
     )
 
     processor = DataProcessor(
         if_judge=if_judge,
         system_steer_judge=system_steer_judge,
         max_concurrency=max_concurrency,
+        exclude_generation_failures=exclude_generation_failures,
     )
 
     try:
@@ -174,6 +181,11 @@ def evaluate(
         logger.info("Evaluation complete!")
         logger.info("Total rows in file: %d", stats["total_rows"])
         logger.info("Filtered rows: %d", stats["filtered_rows"])
+        if exclude_generation_failures:
+            logger.info(
+                "Generation failures excluded: %d",
+                stats.get("generation_failures_excluded", 0),
+            )
         logger.info("Processed rows: %d", stats["processed_rows"])
         logger.info("Successful: %d", stats["successful_rows"])
         logger.info("Failed: %d", stats["failed_rows"])
